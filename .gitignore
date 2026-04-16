@@ -1,0 +1,29 @@
+# Arduino build output
+build/
+*.bin
+*.elf
+*.hex
+*.map
+*.lst
+
+# STM32CubeIDE
+.cproject
+.project
+.settings/
+Debug/
+Release/
+*.launch
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# VS Code
+.vscode/
+
+# Temp files
+*.tmp
+*.log
