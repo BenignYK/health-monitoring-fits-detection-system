@@ -1,146 +1,143 @@
-# Health Monitoring System
+# Health Monitoring & Fall Detection System (STM32F4)
 
-An embedded health monitoring system on the STM32F407VGTx that reads biometric and motion data, streams it wirelessly over Bluetooth, and triggers a buzzer alert when readings breach safety thresholds.
+A real-time embedded health monitoring system built on the STM32F407VGTx (ARM Cortex-M4) that performs heart rate monitoring and fall detection, streams telemetry over Bluetooth, and triggers emergency alerts under critical conditions.
 
 ---
 
-## Hardware
+## Key Features
 
-| Component      | Role                                        |
-|---------------|---------------------------------------------|
-| STM32F407VGTx | ARM Cortex-M4 MCU, 168 MHz                  |
-| MAX30100       | Heart rate and SpO2 sensor (I2C)            |
-| MPU6050        | 6-axis accelerometer and gyroscope (I2C)    |
-| HC-05          | Bluetooth serial module (UART)              |
-| Buzzer         | Active buzzer for emergency alert           |
+- Real-time heart rate (BPM) estimation using IR signal peak detection  
+- Fall detection using accelerometer magnitude vector  
+- Dual I2C architecture to eliminate bus conflicts  
+- Wireless data streaming via Bluetooth (HC-05)  
+- Emergency alert system (LED + buzzer + UART message)  
+- Register-level sensor interfacing without external libraries  
 
 ---
 
 ## System Architecture
 
-```
-STM32F407VGTx
-  |-- I2C1  (PB6/PB7)   --> MPU6050   (Accel / Gyro)
-  |-- I2C2  (PB10/PB11) --> MAX30100  (Heart Rate / SpO2)
-  |-- USART2 (PA2/PA3)  --> HC-05     (Bluetooth TX/RX)
-  |-- GPIO  (PB0)       --> Buzzer    (Emergency Alert)
-```
-
-Two independent I2C buses prevent address conflicts between sensors.
-
----
-
-## Pin Configuration
-
-| Signal       | Pin  | Peripheral    |
-|-------------|------|---------------|
-| I2C1 SDA    | PB7  | MPU6050       |
-| I2C1 SCL    | PB6  | MPU6050       |
-| I2C2 SDA    | PB11 | MAX30100      |
-| I2C2 SCL    | PB10 | MAX30100      |
-| USART2 TX   | PA2  | HC-05 RX      |
-| USART2 RX   | PA3  | HC-05 TX      |
-| Buzzer      | PB0  | Active Buzzer |
-| Onboard LED | PC13 | Status LED    |
-
-> MAX30100 and MPU6050 run on 3.3V. The HC-05 RX pin requires a voltage divider when wired to the STM32 TX line.
+                ┌──────────────────────────┐
+                │   STM32F407VGTx MCU     │
+                │  (ARM Cortex-M4 @168MHz)│
+                └──────────┬──────────────┘
+                           │
+     ┌─────────────────────┼─────────────────────┐
+     │                     │                     │
+  I2C1                  I2C2                 USART2
+(PB6/PB7)            (PB10/PB11)           (PA2/PA3)
+     │                     │                     │
+ MPU6050             MAX30100               HC-05
+(Accel/Gyro)      (Heart Rate)          (Bluetooth)
+     │                                         │
+     └────────────── GPIO (PC13) ───────────────┘
+                          │
+                      LED / Buzzer
 
 ---
 
-## Alert Thresholds
+## STM32F4 Pin Mapping
 
-| Condition      | Parameter                         | Threshold       |
-|---------------|-----------------------------------|-----------------|
-| Fall detected  | magnitude = sqrt(Ax²+Ay²+Az²)    | > 20000         |
-| Bradycardia    | BPM                               | < 50            |
-| Tachycardia    | BPM                               | > 120           |
+| Function       | STM32 Pin | Connected Device |
+|----------------|----------|------------------|
+| I2C1 SCL       | PB6      | MPU6050          |
+| I2C1 SDA       | PB7      | MPU6050          |
+| I2C2 SCL       | PB10     | MAX30100         |
+| I2C2 SDA       | PB11     | MAX30100         |
+| USART2 TX      | PA2      | HC-05 RX         |
+| USART2 RX      | PA3      | HC-05 TX         |
+| Status LED     | PC13     | Onboard LED      |
+| Buzzer         | PB0      | Active buzzer    |
 
-BPM = 0 (no finger placed) is excluded from evaluation. When any condition is triggered, the buzzer activates, the onboard LED goes HIGH, and `EMERGENCY DETECTED` is transmitted over Bluetooth.
-
----
-
-## Firmware Overview
-
-**Initialisation:** USART2 at 9600 baud, I2C1 wakes MPU6050 (reg 0x6B = 0x00), I2C2 configures MAX30100 (soft reset, SpO2 mode, ADC range, LED amplitude).
-
-**MAX30100 Register Map:**
-
-| Register | Value | Purpose                        |
-|---------|-------|--------------------------------|
-| 0x06    | 0x40  | Soft reset                     |
-| 0x06    | 0x03  | SpO2 mode                      |
-| 0x07    | 0x27  | ADC range and sample rate      |
-| 0x09    | 0x24  | LED pulse amplitude            |
-
-**Main loop (200 ms cycle):** Read MPU6050 accelerometer → compute magnitude → read MAX30100 IR → derive BPM from inter-beat interval → evaluate thresholds → drive buzzer/LED → transmit data over UART.
+Electrical Notes:
+- All sensors operate at 3.3V logic
+- Use voltage divider for HC-05 RX
+- Use 4.7kΩ pull-up resistors on I2C lines
 
 ---
 
-## Communication Protocol
+## Sensor Configuration
 
-Data streams over Bluetooth at 9600 baud, newline-terminated:
+### MAX30100
 
-```
+| Register | Value | Description |
+|----------|-------|-------------|
+| 0x06     | 0x40  | Reset       |
+| 0x06     | 0x03  | SpO2 Mode   |
+| 0x07     | 0x27  | Sample Rate |
+| 0x09     | 0x24  | LED Current |
+
+### MPU6050
+
+| Register | Value | Description |
+|----------|-------|-------------|
+| 0x6B     | 0x00  | Wake-up     |
+
+---
+
+## Detection Logic
+
+Acceleration magnitude:
+
+|A| = sqrt(Ax^2 + Ay^2 + Az^2)
+
+Trigger condition:
+- Fall detected if magnitude > 20000
+
+Heart rate:
+- BPM = 60000 / (time between peaks)
+
+---
+
+## Emergency Conditions
+
+| Condition       | Threshold        |
+|----------------|-----------------|
+| Fall            | > 20000         |
+| Bradycardia     | BPM < 50        |
+| Tachycardia     | BPM > 120       |
+
+---
+
+## Data Output
+
 AX: <val> AY: <val> AZ: <val> | BPM: <val> | IR: <val>
-EMERGENCY DETECTED   (appended when threshold is breached)
-```
+EMERGENCY DETECTED
 
----
-
-## Nurse Monitoring via Serial Bluetooth Terminal
-
-A nurse within Bluetooth range (~10 m) can view live readings on an Android phone using **Serial Bluetooth Terminal**.
-
-[Download on Google Play](https://play.google.com/store/search?q=bluetooth%20serial%20terminal&c=apps&hl=en_IN)
-
-**Setup:**
-1. Pair phone with **HC-05** (PIN: `1234` or `0000`).
-2. Open the app, select HC-05, set baud rate to **9600**, and connect.
-3. Readings stream at 200 ms intervals. `EMERGENCY DETECTED` appears alongside the buzzer alert for immediate triage.
-
-**Notes:** HC-05 supports one active connection at a time. The device continues alerting locally via buzzer if the Bluetooth connection drops. The app supports session logging for later review.
-
----
-
-## Getting Started
-
-**Prerequisites:** Arduino IDE with STM32duino board support, ST-LINK V2 programmer.
-
-```bash
-git clone https://github.com/<your-username>/health-monitoring-system.git
-```
-
-1. Open `src/main.ino` in Arduino IDE.
-2. Board: Generic STM32F4 Series > STM32F407VGTx.
-3. Upload method: ST-LINK.
-4. Compile and flash.
+- Baud rate: 9600
+- Interval: 200 ms
 
 ---
 
 ## Project Structure
 
-```
 health-monitoring-system/
-|-- src/
-|   |-- main.ino
-|-- docs/
-|   |-- circuit_diagram.png
-|   |-- block_diagram.png
-|-- README.md
-```
+│── main_project/
+│   └── main_project.ino
+│
+│── max30100_test/
+│   └── max30100_init.ino
+│
+│── mpu6050_test/
+│   └── mpu6050_init.ino
+│
+└── README.md
 
 ---
 
-## Future Improvements
+## Resume-Ready Description
 
-- Integrate official MAX30100 library for accurate SpO2 readings
-- Use gyroscope data for orientation-based fall detection
-- Add FreeRTOS for deterministic sensor scheduling
-- Add SIM800L GSM module for SMS alerts beyond Bluetooth range
-- Log timestamped data to SD card for clinical review
+Embedded Health Monitoring & Fall Detection System | STM32F4
+
+- Designed and implemented a real-time embedded system using STM32F407VGTx (ARM Cortex-M4) for heart rate monitoring and fall detection  
+- Interfaced MAX30100 (I2C) for IR-based BPM estimation and MPU6050 for motion sensing using dual I2C buses  
+- Developed peak detection algorithm for heart rate calculation and vector-based acceleration model for fall detection  
+- Integrated UART-based Bluetooth (HC-05) for real-time telemetry streaming to mobile devices  
+- Implemented threshold-based emergency alert system (LED, buzzer, and wireless alert)  
+- Configured sensors using low-level register programming without external libraries  
 
 ---
 
 ## License
 
-MIT License. See `LICENSE` for details.
+MIT License
